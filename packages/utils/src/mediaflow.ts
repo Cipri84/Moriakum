@@ -3,10 +3,13 @@ import path from 'path';
 import { Settings } from './settings';
 import { getTextHash } from './crypto';
 import { Cache } from './cache';
+import { createLogger } from './logger';
+
+const logger = createLogger('mediaflow');
 
 const PRIVATE_CIDR = /^(10\.|127\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)/;
 
-export function createProxiedMediaFlowUrl(
+export async function createProxiedMediaFlowUrl(
   url: string,
   mediaFlowConfig: Config['mediaFlowConfig'],
   headers?: {
@@ -15,21 +18,15 @@ export function createProxiedMediaFlowUrl(
   }
 ) {
   if (!url) {
-    console.error(
-      '|ERR| mediaflow > createProxiedMediaFlowUrl > streamUrl is missing, could not create proxied URL'
-    );
+    logger.error('streamUrl is missing, could not create proxied URL');
     throw new Error('Stream URL is missing');
   }
   if (!mediaFlowConfig) {
-    console.error(
-      '|ERR| mediaflow > createProxiedMediaFlowUrl > mediaFlowConfig is missing'
-    );
+    logger.error('mediaFlowConfig is missing');
     throw new Error('MediaFlow configuration is missing');
   }
   if (!mediaFlowConfig?.proxyUrl || !mediaFlowConfig?.apiPassword) {
-    console.error(
-      '|ERR| mediaflow > createProxiedMediaFlowUrl > mediaFlowUrl or API password is missing'
-    );
+    logger.error('mediaFlowUrl or API password is missing');
     throw new Error('MediaFlow URL or API password is missing');
   }
 
@@ -42,6 +39,16 @@ export function createProxiedMediaFlowUrl(
     'Content-Disposition': `attachment; filename=${path.basename(url)}`,
   };
   const requestHeaders = headers?.request || {};
+
+  if (Settings.ENCRYPT_MEDIAFLOW_URLS) {
+    const encryptedUrl = await encryptMediaFlowUrl(
+      url,
+      mediaFlowConfig,
+      responseHeaders,
+      requestHeaders
+    );
+    return encryptedUrl;
+  }
 
   if (requestHeaders) {
     Object.entries(requestHeaders).forEach(([key, value]) => {
@@ -63,22 +70,63 @@ export function createProxiedMediaFlowUrl(
   return proxiedUrl.toString();
 }
 
+async function encryptMediaFlowUrl(
+  url: string,
+  mediaFlowConfig: Config['mediaFlowConfig'],
+  responseHeaders: Record<string, string>,
+  requestHeaders: Record<string, string>
+) {
+  if (!mediaFlowConfig) {
+    throw new Error('MediaFlow configuration is missing');
+  }
+  const proxyUrl = new URL(mediaFlowConfig.proxyUrl.replace(/\/$/, ''));
+  const generateEncryptedUrlEndpoint = '/generate_encrypted_or_encoded_url';
+  proxyUrl.pathname = `${proxyUrl.pathname === '/' ? '' : proxyUrl.pathname}${generateEncryptedUrlEndpoint}`;
+
+  const data = {
+    mediaflow_proxy_url: mediaFlowConfig.proxyUrl.replace(/\/$/, ''),
+    endpoint: '/proxy/stream',
+    destination_url: url,
+    request_headers: requestHeaders,
+    response_headers: responseHeaders,
+    expiration: 3600 * 24, // URL will expire in 24 hours
+    api_password: mediaFlowConfig.apiPassword,
+  };
+
+  const response = await fetch(proxyUrl.toString(), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(data),
+    signal: AbortSignal.timeout(Settings.MEDIAFLOW_IP_TIMEOUT),
+  });
+  if (!response.ok) {
+    throw new Error(`${response.status}: ${response.statusText}`);
+  }
+  const responseData = await response.json();
+  if (responseData.error) {
+    throw new Error(responseData.error);
+  }
+  if (responseData.encoded_url) {
+    return responseData.encoded_url;
+  } else {
+    throw new Error('No encrypted or encoded URL returned');
+  }
+}
+
 export async function getMediaFlowPublicIp(
   mediaFlowConfig: Config['mediaFlowConfig'],
   cache: Cache<string, string>
 ) {
   try {
     if (!mediaFlowConfig) {
-      console.error(
-        '|ERR| mediaflow > getMediaFlowPublicIp > mediaFlowConfig is missing'
-      );
+      logger.error('mediaFlowConfig is missing');
       throw new Error('MediaFlow configuration is missing');
     }
 
     if (!mediaFlowConfig?.proxyUrl) {
-      console.error(
-        '|ERR| mediaflow > getMediaFlowPublicIp > mediaFlowUrl is missing'
-      );
+      logger.error('mediaFlowUrl is missing');
       throw new Error('MediaFlow URL is missing');
     }
 
@@ -89,8 +137,8 @@ export async function getMediaFlowPublicIp(
     const mediaFlowUrl = new URL(mediaFlowConfig.proxyUrl.replace(/\/$/, ''));
     if (PRIVATE_CIDR.test(mediaFlowUrl.hostname)) {
       // MediaFlow proxy URL is a private IP address
-      console.debug(
-        '|DBG| mediaflow > getMediaFlowPublicIp > MediaFlow proxy URL is a private IP address so returning null'
+      logger.debug(
+        'MediaFlow proxy URL is a private IP address so returning null'
       );
       return null;
     }
@@ -100,9 +148,7 @@ export async function getMediaFlowPublicIp(
     );
     const cachedPublicIp = cache ? cache.get(cacheKey) : null;
     if (cachedPublicIp) {
-      console.debug(
-        `|DBG| mediaflow > getMediaFlowPublicIp > Returning cached public IP`
-      );
+      logger.debug(`Returning cached public IP`);
       return cachedPublicIp;
     }
 
@@ -114,13 +160,9 @@ export async function getMediaFlowPublicIp(
     }).toString();
 
     if (Settings.LOG_SENSITIVE_INFO) {
-      console.debug(
-        `|DBG| mediaflow > getMediaFlowPublicIp > GET ${proxyIpUrl.toString()}`
-      );
+      logger.debug(`GET ${proxyIpUrl.toString()}`);
     } else {
-      console.debug(
-        '|DBG| mediaflow > getMediaFlowPublicIp > GET /proxy/ip?api_password=***'
-      );
+      logger.debug('GET /proxy/ip?api_password=***');
     }
 
     const response = await fetch(proxyIpUrl.toString(), {
@@ -142,7 +184,7 @@ export async function getMediaFlowPublicIp(
     }
     return publicIp;
   } catch (error: any) {
-    console.error(`|ERR| mediaflow > getMediaFlowPublicIp > ${error.message}`);
+    logger.error(`${error.message}`);
     return null;
   }
 }
