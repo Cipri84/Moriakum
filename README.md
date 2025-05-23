@@ -127,4 +127,4 @@ AIOStreams and its developer do not host, store, or distribute any content. All 
 - Thanks to all the developers of the upstream addons that AIOStreams integrates.
 - [Mhdzumair/MediaFlow](https://github.com/Mhdzumair/mediaflow-proxy) and [MunifTanjim/stremthru](https://github.com/MunifTanjim/stremthru) which allow stream proxying. 
 - Issue templates adapted from [5rahim/seanime](https://github.com/5rahim/seanime).
-- Custom formatter system inspired by and adapted from [diced/zipline](https://github.com/diced/zipline).
+- Custom formatter system inspired by and adapted from [diced/zipline](https://github.com/diced/zipline). 
